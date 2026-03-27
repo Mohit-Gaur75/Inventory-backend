@@ -13,6 +13,7 @@ const {
 dotenv.config();
 connectDB();
 
+
 const app = express();
 
 
@@ -24,6 +25,7 @@ app.use(xssMiddleware);
 
 const allowedOrigins = [
   "http://localhost:3000",
+  "http://localhost:3001",
   process.env.CLIENT_URL,
 ].filter(Boolean);
 
