@@ -39,7 +39,7 @@ router.post(
     }
 
     try {
-      if (email === process.env.ADMIN_EMAIL)
+      if (email === process.env.ADMIN_EMAIL || email === process.env.EMAIL)
         return res.status(400).json({ message: "This email is reserved" });
 
       const exists = await User.findOne({ email });

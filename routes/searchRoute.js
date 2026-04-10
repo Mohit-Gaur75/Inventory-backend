@@ -16,6 +16,44 @@ const getDistanceKm = (lat1, lon1, lat2, lon2) => {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 };
 
+router.get("/autocomplete", async (req, res) => {
+  try {
+    const { q } = req.query;
+    if (!q || q.trim().length < 1) {
+      const trending = await Product.find({ isAvailable: true })
+        .sort({ stock: -1, createdAt: -1 })
+        .limit(8)
+        .select("name category image images price")
+        .lean();
+      const seen = new Set();
+      const deduped = trending.filter((p) => {
+        const key = p.name.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      return res.json({ suggestions: [], trending: deduped });
+    }
+    const suggestions = await Product.find({
+      name: { $regex: q.trim(), $options: "i" },
+      isAvailable: true,
+    })
+      .sort({ name: 1 })
+      .limit(10)
+      .select("name category image images price")
+      .lean();
+    const seen = new Set();
+    const deduped = suggestions.filter((p) => {
+      const key = p.name.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    res.json({ suggestions: deduped, trending: [] });
+  } catch (err) {
+    res.status(500).json({ message: "Autocomplete error", error: err.message });
+  }
+});
 
 router.get("/", async (req, res) => {
   try {
