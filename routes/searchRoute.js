@@ -20,36 +20,42 @@ router.get("/autocomplete", async (req, res) => {
   try {
     const { q } = req.query;
     if (!q || q.trim().length < 1) {
-      const trending = await Product.find({ isAvailable: true })
+      const trending = await Product.find({ isAvailable: true, stock: { $gt: 0 } })
+        .populate({ path: "shop", select: "name address location category phone isActive" })
         .sort({ stock: -1, createdAt: -1 })
-        .limit(8)
-        .select("name category image images price")
+        .limit(10)
         .lean();
+
+      const activeOnly = trending.filter(p => p.shop && p.shop.isActive !== false);
       const seen = new Set();
-      const deduped = trending.filter((p) => {
+      const deduped = activeOnly.filter((p) => {
         const key = p.name.toLowerCase();
         if (seen.has(key)) return false;
         seen.add(key);
         return true;
       });
-      return res.json({ suggestions: [], trending: deduped });
+      return res.json({ suggestions: [], trending: deduped.slice(0, 8) });
     }
+
     const suggestions = await Product.find({
       name: { $regex: q.trim(), $options: "i" },
       isAvailable: true,
+      stock: { $gt: 0 },
     })
+      .populate({ path: "shop", select: "name address location category phone isActive" })
       .sort({ name: 1 })
-      .limit(10)
-      .select("name category image images price")
+      .limit(12)
       .lean();
+
+    const activeOnly = suggestions.filter(p => p.shop && p.shop.isActive !== false);
     const seen = new Set();
-    const deduped = suggestions.filter((p) => {
+    const deduped = activeOnly.filter((p) => {
       const key = p.name.toLowerCase();
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
     });
-    res.json({ suggestions: deduped, trending: [] });
+    res.json({ suggestions: deduped.slice(0, 8), trending: [] });
   } catch (err) {
     res.status(500).json({ message: "Autocomplete error", error: err.message });
   }
@@ -63,9 +69,12 @@ router.get("/", async (req, res) => {
       inStockOnly, page = 1, limit = 12,
     } = req.query;
 
-    const filter = { isAvailable: true };
-    if (inStockOnly === "true") filter.stock = { $gt: 0 };
-    if (q) filter.name = { $regex: q, $options: "i" };
+    // Filter strictly for products available currently
+    const filter = { isAvailable: true, stock: { $gt: 0 } };
+    if (inStockOnly === "false") {
+      delete filter.stock;
+    }
+    if (q && q.trim()) filter.name = { $regex: q.trim(), $options: "i" };
     if (category && category !== "All") filter.category = category;
 
     if (minPrice || maxPrice) {
@@ -75,30 +84,69 @@ router.get("/", async (req, res) => {
     }
 
     let products = await Product.find(filter)
-      .populate({ path: "shop", select: "name address location category phone" })
+      .populate({ path: "shop", select: "name address location category phone isActive isOpen businessHours" })
       .lean();
 
+    // Only include products from active shops
+    products = products.filter(p => p.shop && p.shop.isActive !== false);
+
+    // Calculate distance if user location is available
     if (lat && lng) {
       const userLat = parseFloat(lat);
       const userLng = parseFloat(lng);
-      const maxDist = maxDistance ? parseFloat(maxDistance) : 50;
 
-      products = products
-        .map((p) => {
-          if (p.shop?.location) {
-            const [sLng, sLat] = p.shop.location.coordinates;
+      products = products.map((p) => {
+        if (p.shop?.location?.coordinates && Array.isArray(p.shop.location.coordinates)) {
+          const [sLng, sLat] = p.shop.location.coordinates;
+          if (sLat != null && sLng != null && !isNaN(sLat) && !isNaN(sLng)) {
             const distance = getDistanceKm(userLat, userLng, sLat, sLng);
-            return { ...p, distance: parseFloat(distance.toFixed(2)) };
+            return { ...p, distance: parseFloat(distance.toFixed(1)) };
           }
-          return { ...p, distance: null };
-        })
-        .filter((p) => p.distance === null || p.distance <= maxDist);
+        }
+        return { ...p, distance: null };
+      });
+
+      // Only filter by distance if maxDistance is explicitly specified by user
+      if (maxDistance && !isNaN(parseFloat(maxDistance))) {
+        const maxDist = parseFloat(maxDistance);
+        products = products.filter((p) => p.distance === null || p.distance <= maxDist);
+      }
     }
 
-    if (sortBy === "price_asc")  products.sort((a, b) => a.price - b.price);
-    if (sortBy === "price_desc") products.sort((a, b) => b.price - a.price);
-    if (sortBy === "distance" && lat && lng) {
-      products.sort((a, b) => (a.distance ?? 999) - (b.distance ?? 999));
+    // Sort order:
+    // Default to distance (nearby shops first) when location is provided or sortBy === "distance"
+    if (sortBy === "distance" || (!sortBy && lat && lng)) {
+      products.sort((a, b) => {
+        if (a.distance != null && b.distance != null) return a.distance - b.distance;
+        if (a.distance != null) return -1;
+        if (b.distance != null) return 1;
+        return 0;
+      });
+    } else if (sortBy === "price_asc") {
+      products.sort((a, b) => a.price - b.price);
+    } else if (sortBy === "price_desc") {
+      products.sort((a, b) => b.price - a.price);
+    } else if (sortBy === "trending") {
+      // If location is provided, sort by nearest first among trending products
+      if (lat && lng) {
+        products.sort((a, b) => {
+          if (a.distance != null && b.distance != null && a.distance !== b.distance) {
+            return a.distance - b.distance;
+          }
+          if (a.distance != null) return -1;
+          if (b.distance != null) return 1;
+          return (b.stock || 0) - (a.stock || 0);
+        });
+      } else {
+        products.sort((a, b) => (b.stock || 0) - (a.stock || 0) || new Date(b.createdAt) - new Date(a.createdAt));
+      }
+    } else if (lat && lng) {
+      products.sort((a, b) => {
+        if (a.distance != null && b.distance != null) return a.distance - b.distance;
+        if (a.distance != null) return -1;
+        if (b.distance != null) return 1;
+        return 0;
+      });
     }
 
     const totalResults = products.length;
@@ -130,15 +178,18 @@ router.get("/compare", async (req, res) => {
     let products = await Product.find({
       name: { $regex: name, $options: "i" },
       isAvailable: true,
+      stock: { $gt: 0 },
     })
-      .populate({ path: "shop", select: "name address location category phone" })
+      .populate({ path: "shop", select: "name address location category phone isActive isOpen" })
       .lean();
+
+    products = products.filter(p => p.shop && p.shop.isActive !== false);
 
     if (lat && lng) {
       const userLat = parseFloat(lat);
       const userLng = parseFloat(lng);
       products = products.map((p) => {
-        if (p.shop?.location) {
+        if (p.shop?.location?.coordinates) {
           const [sLng, sLat] = p.shop.location.coordinates;
           return { ...p, distance: parseFloat(getDistanceKm(userLat, userLng, sLat, sLng).toFixed(2)) };
         }
