@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const Product = require("../models/Product");
 const Shop = require("../models/Shop");
+const { getCache, setCache } = require("../config/redis");
 
 const getDistanceKm = (lat1, lon1, lat2, lon2) => {
   const R = 6371;
@@ -19,7 +20,16 @@ const getDistanceKm = (lat1, lon1, lat2, lon2) => {
 router.get("/autocomplete", async (req, res) => {
   try {
     const { q } = req.query;
-    if (!q || q.trim().length < 1) {
+    const cleanQ = q ? q.trim().toLowerCase() : "";
+    const cacheKey = `autocomplete:${cleanQ || "__trending__"}`;
+
+    const cached = await getCache(cacheKey);
+    if (cached) {
+      res.setHeader("X-Cache", "HIT");
+      return res.json(cached);
+    }
+
+    if (!cleanQ) {
       const trending = await Product.find({ isAvailable: true, stock: { $gt: 0 } })
         .populate({ path: "shop", select: "name address location category phone isActive" })
         .sort({ stock: -1, createdAt: -1 })
@@ -34,11 +44,14 @@ router.get("/autocomplete", async (req, res) => {
         seen.add(key);
         return true;
       });
-      return res.json({ suggestions: [], trending: deduped.slice(0, 8) });
+      const result = { suggestions: [], trending: deduped.slice(0, 8) };
+      await setCache(cacheKey, result, 300); // 5 min TTL
+      res.setHeader("X-Cache", "MISS");
+      return res.json(result);
     }
 
     const suggestions = await Product.find({
-      name: { $regex: q.trim(), $options: "i" },
+      name: { $regex: cleanQ, $options: "i" },
       isAvailable: true,
       stock: { $gt: 0 },
     })
@@ -55,7 +68,10 @@ router.get("/autocomplete", async (req, res) => {
       seen.add(key);
       return true;
     });
-    res.json({ suggestions: deduped.slice(0, 8), trending: [] });
+    const result = { suggestions: deduped.slice(0, 8), trending: [] };
+    await setCache(cacheKey, result, 300); // 5 min TTL
+    res.setHeader("X-Cache", "MISS");
+    res.json(result);
   } catch (err) {
     res.status(500).json({ message: "Autocomplete error", error: err.message });
   }
@@ -68,6 +84,13 @@ router.get("/", async (req, res) => {
       maxDistance, minPrice, maxPrice,
       inStockOnly, page = 1, limit = 12,
     } = req.query;
+
+    const cacheKey = `search:${JSON.stringify(req.query)}`;
+    const cached = await getCache(cacheKey);
+    if (cached) {
+      res.setHeader("X-Cache", "HIT");
+      return res.json(cached);
+    }
 
     // Filter strictly for products available currently
     const filter = { isAvailable: true, stock: { $gt: 0 } };
@@ -113,8 +136,7 @@ router.get("/", async (req, res) => {
       }
     }
 
-    // Sort order:
-    // Default to distance (nearby shops first) when location is provided or sortBy === "distance"
+    // Sort order
     if (sortBy === "distance" || (!sortBy && lat && lng)) {
       products.sort((a, b) => {
         if (a.distance != null && b.distance != null) return a.distance - b.distance;
@@ -127,7 +149,6 @@ router.get("/", async (req, res) => {
     } else if (sortBy === "price_desc") {
       products.sort((a, b) => b.price - a.price);
     } else if (sortBy === "trending") {
-      // If location is provided, sort by nearest first among trending products
       if (lat && lng) {
         products.sort((a, b) => {
           if (a.distance != null && b.distance != null && a.distance !== b.distance) {
@@ -154,7 +175,7 @@ router.get("/", async (req, res) => {
     const startIndex   = (parseInt(page) - 1) * parseInt(limit);
     const paginated    = products.slice(startIndex, startIndex + parseInt(limit));
 
-    res.json({
+    const responsePayload = {
       products: paginated,
       pagination: {
         total: totalResults,
@@ -164,7 +185,11 @@ router.get("/", async (req, res) => {
         hasNextPage: parseInt(page) < totalPages,
         hasPrevPage: parseInt(page) > 1,
       },
-    });
+    };
+
+    await setCache(cacheKey, responsePayload, 120); // 2 min TTL
+    res.setHeader("X-Cache", "MISS");
+    res.json(responsePayload);
   } catch (err) {
     res.status(500).json({ message: "Server error", error: err.message });
   }
@@ -174,6 +199,13 @@ router.get("/compare", async (req, res) => {
   try {
     const { name, lat, lng } = req.query;
     if (!name) return res.status(400).json({ message: "Product name required" });
+
+    const cacheKey = `compare:${JSON.stringify(req.query)}`;
+    const cached = await getCache(cacheKey);
+    if (cached) {
+      res.setHeader("X-Cache", "HIT");
+      return res.json(cached);
+    }
 
     let products = await Product.find({
       name: { $regex: name, $options: "i" },
@@ -199,12 +231,16 @@ router.get("/compare", async (req, res) => {
 
     products.sort((a, b) => a.price - b.price);
 
-    res.json({
+    const result = {
       productName: name,
       count: products.length,
       lowestPrice: products[0]?.price ?? null,
       products,
-    });
+    };
+
+    await setCache(cacheKey, result, 120); // 2 min TTL
+    res.setHeader("X-Cache", "MISS");
+    res.json(result);
   } catch (err) {
     res.status(500).json({ message: "Server error", error: err.message });
   }
@@ -214,6 +250,13 @@ router.get("/nearby-shops", async (req, res) => {
   try {
     const { lat, lng, maxDistance = 10 } = req.query;
     if (!lat || !lng) return res.status(400).json({ message: "lat and lng required" });
+
+    const cacheKey = `nearby:${lat}:${lng}:${maxDistance}`;
+    const cached = await getCache(cacheKey);
+    if (cached) {
+      res.setHeader("X-Cache", "HIT");
+      return res.json(cached);
+    }
 
     const shops = await Shop.find({
       isActive: true,
@@ -225,7 +268,10 @@ router.get("/nearby-shops", async (req, res) => {
       },
     }).limit(20);
 
-    res.json({ count: shops.length, shops });
+    const result = { count: shops.length, shops };
+    await setCache(cacheKey, result, 120); // 2 min TTL
+    res.setHeader("X-Cache", "MISS");
+    res.json(result);
   } catch (err) {
     res.status(500).json({ message: "Server error", error: err.message });
   }

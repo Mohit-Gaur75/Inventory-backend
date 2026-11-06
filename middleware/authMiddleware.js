@@ -1,6 +1,7 @@
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 const BlacklistedToken = require("../models/BlacklistedToken");
+const { getCache } = require("../config/redis");
 
 const protect = async (req, res, next) => {
   let token;
@@ -11,12 +12,17 @@ const protect = async (req, res, next) => {
     try {
       token = req.headers.authorization.split(" ")[1];
 
+      // 1. Fast in-memory Redis blacklist check (<1ms)
+      const inRedis = await getCache(`blacklist:${token}`);
+      if (inRedis) {
+        return res.status(401).json({ message: "Token has been invalidated. Please login again." });
+      }
 
+      // 2. Fallback check in MongoDB
       const isBlacklisted = await BlacklistedToken.findOne({ token });
       if (isBlacklisted) {
         return res.status(401).json({ message: "Token has been invalidated. Please login again." });
       }
-
 
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
       req.user = await User.findById(decoded.id).select("-password");
@@ -24,7 +30,6 @@ const protect = async (req, res, next) => {
       if (!req.user) {
         return res.status(401).json({ message: "User not found" });
       }
-
 
       if (req.user.isBanned) {
         return res.status(403).json({ message: "Your account has been banned" });
@@ -39,7 +44,6 @@ const protect = async (req, res, next) => {
     return res.status(401).json({ message: "Not authorized, no token" });
   }
 };
-
 
 const authorize = (...roles) => {
   return (req, res, next) => {

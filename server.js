@@ -6,6 +6,7 @@ const path    = require("path");
 const validateEnv = require("./config/validateEnv");
 const { initSocket } = require("./socket");
 const connectDB = require("./config/db");
+const { initRedis, isRedisConnected } = require("./config/redis");
 const {
   helmetMiddleware,
   apiLimiter,
@@ -16,6 +17,7 @@ const {
 dotenv.config();
 validateEnv();
 connectDB();
+initRedis();
 
 const app    = express();
 const server = http.createServer(app);
@@ -72,6 +74,7 @@ app.get("/api/health", (req, res) => {
     status:      "OK",
     message:     "LocalMart API is running",
     environment: process.env.NODE_ENV,
+    redis:       isRedisConnected() ? "connected" : "disconnected",
     timestamp:   new Date().toISOString(),
   });
 });

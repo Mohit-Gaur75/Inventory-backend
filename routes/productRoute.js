@@ -5,8 +5,16 @@ const Shop    = require("../models/Shop");
 const { protect, authorize } = require("../middleware/authMiddleware");
 const { createNotification } = require("../utils/notificationHelper");
 const ProductAnalytics = require("../models/ProductAnalytics");
+const { getCache, setCache, delCache, delPattern } = require("../config/redis");
 
 const LOW_STOCK_THRESHOLD = 5;
+
+const invalidateProductCaches = (productId) => {
+  delPattern("search:*").catch(() => {});
+  delPattern("autocomplete:*").catch(() => {});
+  delPattern("compare:*").catch(() => {});
+  if (productId) delCache(`product:${productId}`).catch(() => {});
+};
 
 router.post("/", protect, authorize("shopkeeper"), async (req, res) => {
   try {
@@ -23,6 +31,8 @@ router.post("/", protect, authorize("shopkeeper"), async (req, res) => {
       stock: parseInt(stock),
       unit, image,
     });
+
+    invalidateProductCaches(product._id);
 
     const io = req.app.get("io");
     if (io) {
@@ -70,6 +80,7 @@ router.put("/:id", protect, authorize("shopkeeper"), async (req, res) => {
     if (image)            product.image       = image;
 
     const updated = await product.save();
+    invalidateProductCaches(product._id);
 
     if (stock !== undefined) {
       const newStock = parseInt(stock);
@@ -147,6 +158,7 @@ router.put("/:id", protect, authorize("shopkeeper"), async (req, res) => {
     res.status(500).json({ message: "Server error", error: err.message });
   }
 });
+
 router.delete("/:id", protect, authorize("shopkeeper"), async (req, res) => {
   try {
     const product = await Product.findById(req.params.id);
@@ -156,6 +168,8 @@ router.delete("/:id", protect, authorize("shopkeeper"), async (req, res) => {
 
     const shopId = product.shop.toString();
     await product.deleteOne();
+
+    invalidateProductCaches(req.params.id);
 
     const io = req.app.get("io");
     if (io) {
@@ -170,9 +184,19 @@ router.delete("/:id", protect, authorize("shopkeeper"), async (req, res) => {
 
 router.get("/:id", async (req, res) => {
   try {
+    const cacheKey = `product:${req.params.id}`;
+    const cached = await getCache(cacheKey);
+    if (cached) {
+      res.setHeader("X-Cache", "HIT");
+      return res.json(cached);
+    }
+
     const product = await Product.findById(req.params.id)
       .populate("shop", "name address location");
     if (!product) return res.status(404).json({ message: "Product not found" });
+
+    await setCache(cacheKey, product, 300); // 5 min TTL
+    res.setHeader("X-Cache", "MISS");
     res.json(product);
   } catch (err) {
     res.status(500).json({ message: "Server error", error: err.message });

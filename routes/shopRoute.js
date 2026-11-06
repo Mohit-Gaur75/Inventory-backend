@@ -3,7 +3,13 @@ const router  = express.Router();
 const Shop    = require("../models/Shop");
 const Product = require("../models/Product");
 const { protect, authorize } = require("../middleware/authMiddleware");
+const { getCache, setCache, delCache, delPattern } = require("../config/redis");
 
+const invalidateShopCaches = (shopId) => {
+  if (shopId) delCache(`shop:${shopId}`).catch(() => {});
+  delPattern("search:*").catch(() => {});
+  delPattern("nearby:*").catch(() => {});
+};
 
 router.post("/", protect, authorize("shopkeeper"), async (req, res) => {
   try {
@@ -17,6 +23,8 @@ router.post("/", protect, authorize("shopkeeper"), async (req, res) => {
       name, description, category, address, phone, email,
       location: { type: "Point", coordinates: [parseFloat(longitude), parseFloat(latitude)] },
     });
+
+    invalidateShopCaches(shop._id);
     res.status(201).json(shop);
   } catch (error) {
     res.status(500).json({ message: "Server error", error: error.message });
@@ -51,6 +59,7 @@ router.put("/:id", protect, authorize("shopkeeper"), async (req, res) => {
       shop.location = { type: "Point", coordinates: [parseFloat(longitude), parseFloat(latitude)] };
 
     const updatedShop = await shop.save();
+    invalidateShopCaches(shop._id);
     res.json(updatedShop);
   } catch (error) {
     res.status(500).json({ message: "Server error", error: error.message });
@@ -59,10 +68,21 @@ router.put("/:id", protect, authorize("shopkeeper"), async (req, res) => {
 
 router.get("/:id", async (req, res) => {
   try {
+    const cacheKey = `shop:${req.params.id}`;
+    const cached = await getCache(cacheKey);
+    if (cached) {
+      res.setHeader("X-Cache", "HIT");
+      return res.json(cached);
+    }
+
     const shop = await Shop.findById(req.params.id).populate("owner", "name email");
     if (!shop) return res.status(404).json({ message: "Shop not found" });
     const products = await Product.find({ shop: shop._id, isAvailable: true });
-    res.json({ shop, products });
+
+    const payload = { shop, products };
+    await setCache(cacheKey, payload, 180); // 3 min TTL
+    res.setHeader("X-Cache", "MISS");
+    res.json(payload);
   } catch (error) {
     res.status(500).json({ message: "Server error", error: error.message });
   }
@@ -87,6 +107,8 @@ router.put("/:id/toggle-open", protect, authorize("shopkeeper"), async (req, res
     shop.isOpen = !shop.isOpen;
     await shop.save();
 
+    invalidateShopCaches(shop._id);
+
     const io = req.app.get("io");
     if (io) io.emit("shop:statusChanged", { shopId: shop._id, isOpen: shop.isOpen, computedIsOpen: shop.computedIsOpen });
 
@@ -95,6 +117,7 @@ router.put("/:id/toggle-open", protect, authorize("shopkeeper"), async (req, res
     res.status(500).json({ message: "Server error", error: error.message });
   }
 });
+
 router.put("/:id/business-hours", protect, authorize("shopkeeper"), async (req, res) => {
   try {
     const shop = await Shop.findById(req.params.id);
@@ -108,11 +131,14 @@ router.put("/:id/business-hours", protect, authorize("shopkeeper"), async (req, 
 
     shop.businessHours = businessHours;
     await shop.save();
+
+    invalidateShopCaches(shop._id);
     res.json({ businessHours: shop.businessHours, computedIsOpen: shop.computedIsOpen });
   } catch (error) {
     res.status(500).json({ message: "Server error", error: error.message });
   }
 });
+
 router.put("/:id/holidays", protect, authorize("shopkeeper"), async (req, res) => {
   try {
     const shop = await Shop.findById(req.params.id);
@@ -126,6 +152,8 @@ router.put("/:id/holidays", protect, authorize("shopkeeper"), async (req, res) =
 
     shop.holidays = holidays;
     await shop.save();
+
+    invalidateShopCaches(shop._id);
     res.json({ holidays: shop.holidays });
   } catch (error) {
     res.status(500).json({ message: "Server error", error: error.message });
