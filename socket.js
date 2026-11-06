@@ -15,6 +15,10 @@ const initSocket = (server) => {
     cors: {
       origin: [
         "http://localhost:3000",
+        "http://localhost:3001",
+        "http://localhost",
+        "http://127.0.0.1",
+        "http://127.0.0.1:3000",
         process.env.CLIENT_URL,
       ].filter(Boolean),
       credentials: true,

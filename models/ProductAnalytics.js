@@ -25,7 +25,6 @@ const ProductAnalyticsSchema = new mongoose.Schema(
     cartAdds:    { type: Number, default: 0 },
     cartRemoves: { type: Number, default: 0 },
 
-    
     favouriteCount: { type: Number, default: 0 },
 
     stockHistory: [
@@ -40,7 +39,6 @@ const ProductAnalyticsSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-ProductAnalyticsSchema.index({ product: 1 });
 ProductAnalyticsSchema.index({ shop: 1 });
 
 module.exports = mongoose.model("ProductAnalytics", ProductAnalyticsSchema);
