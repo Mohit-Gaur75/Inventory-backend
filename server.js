@@ -14,7 +14,7 @@ const {
   xssMiddleware,
 } = require("./middleware/security");
 
-dotenv.config();
+dotenv.config({ path: path.join(__dirname, ".env") });
 validateEnv();
 connectDB();
 initRedis();
