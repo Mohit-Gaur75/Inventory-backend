@@ -311,19 +311,19 @@ async function main() {
   );
   console.log(`📦 Created ${productDocs.length} products`);
 
-  // ── Create reviews (2-4 per product, from random customers) ──────────────
+  // ── Create reviews (customers review shops) ──────────────────────────────
   const reviewSeed = [];
-  productDocs.forEach((prod, pIdx) => {
-    const count = 2 + (pIdx % 3); // 2, 3 or 4 reviews
-    for (let r = 0; r < count; r++) {
-      const customer = customerDocs[(pIdx + r) % customerDocs.length];
-      reviewSeed.push({
-        product:  prod._id,
-        user:     customer._id,
-        rating:   pickRating(pIdx + r),
-        comment:  pickReview(pIdx + r),
-      });
-    }
+  shopDocs.forEach((shop, sIdx) => {
+    customerDocs.forEach((customer, cIdx) => {
+      if ((sIdx + cIdx) % 2 === 0 || cIdx < 3) {
+        reviewSeed.push({
+          shop:    shop._id,
+          user:    customer._id,
+          rating:  pickRating(sIdx * 3 + cIdx),
+          comment: pickReview(sIdx * 3 + cIdx),
+        });
+      }
+    });
   });
   await Review.create(reviewSeed);
   console.log(`⭐ Created ${reviewSeed.length} reviews`);
@@ -345,17 +345,22 @@ async function main() {
   await Favourite.create([...favMap.values()]);
   console.log(`❤️  Created ${favMap.size} favourites`);
 
-  // ── Create cart items (each customer has 3-5 items in cart) ───────────────
-  const cartSeed = [];
-  customerDocs.forEach((cust, ci) => {
+  // ── Create carts (one cart per customer containing items) ───────────────
+  const cartSeed = customerDocs.map((cust, ci) => {
     const count = 3 + (ci % 3);
+    const items = [];
     for (let c = 0; c < count; c++) {
       const prod = productDocs[(ci * 17 + c * 11) % productDocs.length];
-      cartSeed.push({ user: cust._id, product: prod._id, quantity: 1 + (c % 3) });
+      items.push({
+        product:  prod._id,
+        shop:     prod.shop,
+        quantity: 1 + (c % 3),
+      });
     }
+    return { user: cust._id, items };
   });
   await Cart.create(cartSeed);
-  console.log(`🛒 Created ${cartSeed.length} cart entries`);
+  console.log(`🛒 Created ${cartSeed.length} customer carts`);
 
   // ── Summary ────────────────────────────────────────────────────────────────
   console.log("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");

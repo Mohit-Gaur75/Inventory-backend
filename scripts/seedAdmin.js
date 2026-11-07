@@ -19,9 +19,9 @@ const seedAdmin = async () => {
     }
 
     const admin = await User.create({
-      name: process.env.NAME,
-      email: process.env.EMAIL,
-      password: process.env.PASSWORD,
+      name: process.env.ADMIN_NAME || process.env.NAME || "LocalMart Admin",
+      email: process.env.ADMIN_EMAIL || process.env.EMAIL || "admin@localmart.co.in",
+      password: process.env.ADMIN_PASSWORD || process.env.PASSWORD || "Admin@1234",
       role: "admin",
     });
 
