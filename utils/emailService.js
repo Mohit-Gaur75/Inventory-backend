@@ -35,7 +35,13 @@ const sendEmail = async ({ to, subject, html, text }) => {
   }
 
   try {
-    const fromAddress = process.env.EMAIL_FROM || `"LocalMart" <${process.env.SMTP_USER}>`;
+    let fromAddress = process.env.EMAIL_FROM ? process.env.EMAIL_FROM.trim() : `"LocalMart" <${process.env.SMTP_USER}>`;
+    while (
+      (fromAddress.startsWith("'") && fromAddress.endsWith("'")) ||
+      (fromAddress.startsWith('"') && fromAddress.endsWith('"'))
+    ) {
+      fromAddress = fromAddress.slice(1, -1).trim();
+    }
     const plainText = text || (html ? html.replace(/<[^>]*>?/gm, "").trim() : "");
 
     const info = await getTransporter().sendMail({

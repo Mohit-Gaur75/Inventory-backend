@@ -4,7 +4,15 @@ let redisClient = null;
 let isConnected = false;
 
 const initRedis = () => {
-  const redisUrl = process.env.REDIS_URL || `redis://${process.env.REDIS_HOST || "127.0.0.1"}:${process.env.REDIS_PORT || 6379}`;
+  const rawUrl = process.env.REDIS_URL ? process.env.REDIS_URL.trim() : "";
+
+  // If in production and REDIS_URL is omitted or empty, run cleanly without cache
+  if (!rawUrl && (process.env.NODE_ENV === "production" || !process.env.REDIS_HOST)) {
+    console.log("ℹ️  [Redis] No REDIS_URL provided. Running with direct database queries & token blacklist.");
+    return null;
+  }
+
+  const redisUrl = rawUrl || `redis://${process.env.REDIS_HOST || "127.0.0.1"}:${process.env.REDIS_PORT || 6379}`;
 
   try {
     redisClient = new Redis(redisUrl, {
